@@ -530,6 +530,8 @@ impl Session {
                     return Ok(());
                 }
                 if let Some(ref mut enc) = self.common.encrypted {
+                    // The peer accepts no more data on this channel.
+                    enc.discard_pending(channel_num);
                     // The CHANNEL_CLOSE message must be sent to the server at this point or the session
                     // will not be released.
                     enc.close(channel_num)?;
