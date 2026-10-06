@@ -1286,6 +1286,8 @@ impl Session {
                     return Ok(());
                 }
                 if let Some(ref mut enc) = self.common.encrypted {
+                    // The peer accepts no more data on this channel.
+                    enc.discard_pending(channel_num);
                     // Reply with CHANNEL_CLOSE per RFC 4254 Section 5.3.
                     enc.close(channel_num)?;
                 }
