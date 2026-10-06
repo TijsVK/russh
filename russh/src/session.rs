@@ -284,6 +284,19 @@ impl Encrypted {
         Ok(())
     }
 
+    /// Drop data and EOF still waiting for window on a channel the peer has closed.
+    ///
+    /// After receiving CHANNEL_CLOSE no more data may be sent on the channel (RFC 4254 5.3), and
+    /// the peer will not adjust its window again, so this data can never leave. Keeping it would
+    /// also keep `has_any_pending_data()` true, which stops the session loop from taking any
+    /// further outbound message for every channel.
+    pub(crate) fn discard_pending(&mut self, channel: ChannelId) {
+        if let Some(channel) = self.channels.get_mut(&channel) {
+            channel.pending_data.clear();
+            channel.pending_eof = false;
+        }
+    }
+
     pub fn close(&mut self, channel: ChannelId) -> Result<(), crate::Error> {
         if let Some(channel) = self.has_pending_data_mut(channel) {
             channel.pending_close = true;
@@ -1530,5 +1543,36 @@ mod tests {
         assert_eq!(channel.pending_data.back().unwrap().0.as_ref(), b"new");
         assert!(encrypted.write.is_empty());
         assert!(writer.buffer().buffer.is_empty());
+    }
+
+    #[test]
+    fn close_with_window_blocked_data_defers_and_keeps_session_pending() {
+        // What the server did on a peer CHANNEL_CLOSE before `discard_pending`: the reply is
+        // deferred behind data the peer will never accept, so the session stays "pending".
+        let channel_id = ChannelId(12);
+        let mut encrypted = test_encrypted();
+        encrypted
+            .channels
+            .insert(channel_id, test_channel_windowed(channel_id, 44, 0, false, false));
+
+        encrypted.close(channel_id).unwrap();
+        assert!(encrypted.write.is_empty());
+        assert!(encrypted.channels.contains_key(&channel_id));
+        assert!(encrypted.has_any_pending_data());
+    }
+
+    #[test]
+    fn peer_close_discards_window_blocked_data_and_replies() {
+        let channel_id = ChannelId(13);
+        let mut encrypted = test_encrypted();
+        encrypted
+            .channels
+            .insert(channel_id, test_channel_windowed(channel_id, 45, 0, true, false));
+
+        encrypted.discard_pending(channel_id);
+        encrypted.close(channel_id).unwrap();
+        assert_eq!(packet_types(&encrypted.write), vec![msg::CHANNEL_CLOSE]);
+        assert!(!encrypted.channels.contains_key(&channel_id));
+        assert!(!encrypted.has_any_pending_data());
     }
 }
